@@ -1,3 +1,6 @@
+// Do you want to do potentially unsafe transformations now? (We'll add comments for you to review them)
+const shouldFixMutations = false;
+
 // Gunar C. Gessner (@gunar) 2016
 // https://github.com/gunar/js-transforms
 //
@@ -23,6 +26,30 @@
 // feat: _.get(object, path, defaultValue) => fp.get(path, object) || defaultValue
 // fix: handle files with require _ and fp
 // fix: files = fp.remove (while both mutate the array, _.remove returns one thing, fp.remove returns other) use fp.reject?
+
+const nonFpMutates = {
+  assign: true,
+  assignIn: true,
+  assignInWith: true,
+  assignWith: true,
+  defaults: true,
+  defaultsDeep: true,
+  fill: true,
+  merge: true,
+  mergeWith: true,
+  pull: true,
+  pullAll: true,
+  pullAllBy: true,
+  pullAllWith: true,
+  pullAt: true,
+  remove: true,
+  reverse: true,
+  set: true,
+  setWith: true,
+  unset: true,
+  update: true,
+  updateWith: true,
+};
 
 const oneToOneRelation = {
   clone: true,
@@ -74,7 +101,50 @@ const oneToOneRelation = {
   sample: true,
   size: true,
   upperFirst: true,
-}
+  camelCase: true,
+  capitalize: true,
+  castArray: true,
+  cond: true,
+  conforms: true,
+  conformsTo: true,
+  deburr: true,
+  escape: true,
+  escapeRegExp: true,
+  flatten: true,
+  flattenDeep: true,
+  flip: true,
+  functions: true,
+  initial: true,
+  kebabCase: true,
+  keys: true,
+  keysIn: true,
+  lowerCase: true,
+  lowerFirst: true,
+  matches: true,
+  mean: true,
+  negate: true,
+  once: true,
+  shuffle: true,
+  snakeCase: true,
+  sortedUniq: true,
+  startCase: true,
+  sum: true,
+  tail: true,
+  toArray: true,
+  toUpper: true,
+  toFinite: true,
+  toInteger: true,
+  toLength: true,
+  toNumber: true,
+  toPath: true,
+  toPlainObject: true,
+  toSafeInteger: true,
+  toString: true,
+  unescape: true,
+  unzip: true,
+  upperCase: true,
+  values: true,
+};
 
 const iterateeCappedToOneArgument = {
   dropRightWhile: true,
@@ -105,23 +175,23 @@ const iterateeCappedToOneArgument = {
   takeRightWhile: true,
   takeWhile: true,
   times: true,
-}
+};
 
 const iterateeCappedToTwoArguments = {
   reduce: true,
   reduceRight: true,
   transform: true,
-}
+};
 
 const dataTypes = {
-  'Boolean': true,
-  'Null': true,
-  'Undefined': true,
-  'Number': true,
-  'String': true,
-  'Symbol': true,
-  'Object': true,
-}
+  Boolean: true,
+  Null: true,
+  Undefined: true,
+  Number: true,
+  String: true,
+  Symbol: true,
+  Object: true,
+};
 
 const fixedArityOne = {
   attempt: true,
@@ -149,7 +219,7 @@ const fixedArityOne = {
   uniq: true,
   uniqueId: true,
   words: true,
-}
+};
 
 const fixedArityTwo = {
   add: true,
@@ -287,7 +357,7 @@ const fixedArityTwo = {
   zip: true,
   zipObject: true,
   zipObjectDeep: true,
-}
+};
 
 const fixedArityThree = {
   assignInWith: true,
@@ -325,13 +395,13 @@ const fixedArityThree = {
   xorBy: true,
   xorWith: true,
   zipWith: true,
-}
+};
 
 const fixedArityFour = {
   fill: true,
   setWith: true,
   updateWith: true,
-}
+};
 
 const shouldNotRotate = {
   add: true,
@@ -361,7 +431,7 @@ const shouldNotRotate = {
   without: true,
   zip: true,
   zipObject: true,
-}
+};
 
 const customArgumentOrder = {
   assignInWith: true,
@@ -380,143 +450,216 @@ const customArgumentOrder = {
   sortedLastIndexBy: true,
   updateWith: true,
   zipWith: true,
-}
+};
 
-const name = p => p.node.callee.property.name
-const rotate = arr => {
-  const first = arr.shift()
-  ;arr.push(first)
-}
+const rotate = (arr) => {
+  const first = arr.shift();
+  arr.push(first);
+};
+
+// TODO:
+// - Convert chain `_(data).foo.bar` to flow
 
 export default function transformer(file, api) {
   const j = api.jscodeshift;
-  const {expression, statement, statements} = j.template;
+  const { expression, statement, statements } = j.template;
+
+  let isNeedingLodashRegularStill = false;
+  const fpMethodsForThisFile = new Set();
 
   const root = j(file.source);
-  let alreadyHasFpRequired = false
-  
-  ;root.find(j.VariableDeclarator, {
-    id: { name: 'fp' },
-    init: {
-      callee: { name: 'require' }
-    },
-  }).forEach(p => {
-    alreadyHasFpRequired = true
-  })
-  
-  if (!alreadyHasFpRequired) {
-  root.find(j.VariableDeclarator, {
-    id: { name: '_' },
-    init: {
-      callee: { name: 'require' }
-    },
-  }).replaceWith(p => {
-    const args = p.node.init.arguments
-    let name = p.node.init.callee.name
-    let value = args[0].value
-    if (args.length === 1 && value === 'lodash') {
-      value = 'lodash/fp'
-      name = 'fp'
-    }
-    return j.variableDeclarator(
-      j.identifier(name),
-      j.callExpression(
-        j.identifier('require'),
-        [j.literal(value)]
-      )
-    )
-  });
+
+  const getFirstNode = () => root.find(j.Program).get('body', 0).node;
+  const firstNode = getFirstNode();
+  const { comments } = firstNode;
+
+  // const replaceWithRequire = p => {
+  //   return j.variableDeclarator(
+  //     j.identifier(allPossibleToDestructureFromModule),
+  //     j.callExpression(j.identifier('require'), [j.literal('lodash/fp')]),
+  //   );
+  // };
+  // root
+  //   .find(j.VariableDeclarator, {
+  //     id: { name: '_' },
+  //     init: {
+  //       callee: { name: 'require' },
+  //     },
+  //   })
+  //   .replaceWith(replaceWithRequire);
+
+  root
+    .find(j.ImportDeclaration, {
+      source: { value: 'lodash/fp' },
+    })
+    .replaceWith((p) => {
+      // Add all the imported methods to the overall list for this file
+      p.value.specifiers.map((specifier) => specifier.imported.name).forEach((item) => fpMethodsForThisFile.add(item));
+
+      return undefined;
+    });
+
+  // remove lodash import, add back later if we need to
+  root
+    .find(j.ImportDeclaration, {
+      source: { value: 'lodash' },
+    })
+    .replaceWith();
+
+  for (const name in oneToOneRelation) {
+    root
+      .find(j.MemberExpression, {
+        object: { name: '_' },
+        property: {
+          type: 'Identifier',
+          name,
+        },
+      })
+      .replaceWith((p) => {
+        fpMethodsForThisFile.add(name);
+
+        return j.identifier(p.node.property.name);
+      });
   }
 
-  root.find(j.MemberExpression, {
-    object: { name: '_' },
-    property: {
-      type: 'Identifier',
-      name: 'identity',
-    }
-  }).replaceWith(p => j.memberExpression(j.identifier('fp'), j.identifier(p.node.property.name)));
-  root.find(j.MemberExpression, {
-    object: { name: '_' },
-    property: {
-      type: 'Identifier',
-      name: 'noop',
-    }
-  }).replaceWith(p => j.memberExpression(j.identifier('fp'), j.identifier(p.node.property.name)));
-
-  root.find(j.CallExpression, {
-    callee: {
-      type: 'MemberExpression',
-        object: {name: '_'}
-      }
+  // Find chains `_(data).foo().bar()`
+  root
+    .find(j.CallExpression, {
+      callee: {
+        name: '_',
+      },
     })
-    .replaceWith(p => {
-      let name = p.node.callee.property.name
-      let args = p.node.arguments
-      let method = '_'
+    .replaceWith((p) => {
+      isNeedingLodashRegularStill = true;
+      return p.node;
+    });
 
-        // So much imperative programming that my brain hurts
+  root
+    .find(j.CallExpression, {
+      callee: {
+        type: 'MemberExpression',
+        object: { name: '_' },
+      },
+    })
+    .replaceWith((p) => {
+
+      if (!p.node.callee.property) {
+        isNeedingLodashRegularStill = true;
+        return p.node; // Complex case, not implemented
+      }
+      let args = p.node.arguments;
+
+      const nodeName = p.node.callee.property.name;
+
+      // Convert three arg `get` to `getOr`.
+      const name = nodeName === 'get' && args.length === 3 ? 'getOr' : nodeName;
+
+      // Bail if we don't want to fix possible mutation scenarios
+      if (nonFpMutates[name] && !shouldFixMutations) {
+        isNeedingLodashRegularStill = true;
+        return p.node;
+      }
 
       if (customArgumentOrder[name]) {
-        // Not implemented
+        if (name !== 'getOr') {
+          isNeedingLodashRegularStill = true;
+          return p.node; // Not implemented
+        }
+        args = args.reverse() // Reverse args for getOr
       } else if (oneToOneRelation[name]) {
-        method = 'fp'
+        // Use FP without changing anything
       } else if (iterateeCappedToOneArgument[name]) {
-        const iteratee = args[1]
-        const isDataType = dataTypes[iteratee.name]
-        const isLiteral = ['ArrayExpression', 'Literal', 'ObjectExpression'].indexOf(iteratee.type) > -1
-        const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee.type) > -1
-        const isFunctionWithOneArg = isFunction && iteratee.params.length === 1
-        const valid = isDataType || isLiteral || isFunctionWithOneArg
-        if (valid) {
-          method = 'fp'
-          args = args.reverse()
+        const iteratee = args[1];
+        const isDataType = dataTypes[iteratee && iteratee.name];
+        const isLiteral = ['ArrayExpression', 'Literal', 'ObjectExpression'].indexOf(iteratee && iteratee.type) > -1;
+        const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee && iteratee.type) > -1;
+        const isFunctionWithOneArg = isFunction && iteratee && iteratee.params.length === 1;
+        const valid = isDataType || isLiteral || isFunctionWithOneArg;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
+
+        args = args.reverse();
       } else if (iterateeCappedToTwoArguments[name]) {
-        const iteratee = args[1]
-        const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee.type) > -1
-        const isFunctionWithTwoArgs = isFunction && iteratee.params.length === 2
-        const arityOfThree = args.length === 3
-        const valid = isFunctionWithTwoArgs && arityOfThree
-        if (valid) {
-          method = 'fp'
-          ;rotate(args)
+        const iteratee = args[1];
+        const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee && iteratee.type) > -1;
+        const isFunctionWithTwoArgs = isFunction && iteratee && iteratee.params.length === 2;
+        const arityOfThree = args.length === 3;
+        const valid = isFunctionWithTwoArgs && arityOfThree;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
+
+        rotate(args);
       } else if (fixedArityOne[name]) {
-        const valid = args.length === 1
-        if (valid) {
-          method = 'fp'
+        const valid = args.length === 1;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
       } else if (fixedArityTwo[name]) {
-        const valid = args.length === 2
-        if (valid) {
-          method = 'fp'
-          if (!shouldNotRotate[name]) rotate(args)
+        const valid = args.length === 2;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
+
+        if (!shouldNotRotate[name]) rotate(args);
       } else if (fixedArityThree[name]) {
-        const valid = args.length === 3
-        if (valid) {
-          method = 'fp'
-          if (!shouldNotRotate[name]) rotate(args)
+        const valid = args.length === 3;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
+
+        if (!shouldNotRotate[name]) rotate(args);
       } else if (fixedArityFour[name]) {
-        const valid = args.length === 4
-        if (valid) {
-          method = 'fp'
-          if (!shouldNotRotate[name]) rotate(args)
+        const valid = args.length === 4;
+        if (!valid) {
+          isNeedingLodashRegularStill = true;
+          return p.node;
         }
+
+        if (!shouldNotRotate[name]) rotate(args);
       }
+      fpMethodsForThisFile.add(name);
 
+      const node = j.callExpression(j.identifier(name), args);
 
-      return j.callExpression(
-        j.memberExpression(
-          j.identifier(method),
-          j.identifier(name)
+      if (nonFpMutates[name]) {
+        node.comments = node.comments || [];
+        node.comments.push(j.commentLine('TODO: Check Mutation'));
+      }
+      return node;
+    });
+
+  if (isNeedingLodashRegularStill) {
+    console.log(file.path, 'still using regular lodash');
+    root
+      .find(j.Program)
+      .get('body', 0)
+      .insertAfter(j.importDeclaration([j.importDefaultSpecifier(j.identifier('_'))], j.literal('lodash')));
+  }
+
+  if (fpMethodsForThisFile.size > 0) {
+    root
+      .find(j.Program)
+      .get('body', 0)
+      .insertAfter(
+        j.importDeclaration(
+          [j.importDefaultSpecifier(j.identifier(`{ ${[...fpMethodsForThisFile].sort().join(', ')} }`))],
+          j.literal('lodash/fp'),
         ),
-        args
-      )
+      );
+  }
 
-    })
+  // If the first node has been modified or deleted, reattach the comments
+  const firstNode2 = getFirstNode();
+  if (firstNode2 !== firstNode) {
+    firstNode2.comments = comments;
+  }
 
-    return root.toSource({ quote: 'single' })
-
+  return root.toSource({ quote: 'single' });
 }
