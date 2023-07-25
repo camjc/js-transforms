@@ -632,6 +632,11 @@ export default function transformer(file, api) {
         node.comments = node.comments || [];
         node.comments.push(j.commentLine('TODO: Check Mutation'));
       }
+
+      if (name.startsWith('partial')) {
+        node.comments = node.comments || [];
+        node.comments.push(j.commentLine('TODO: Check second arg is an Array of args like `partial(myFunc, [arg0])`'));
+      }
       return node;
     });
 
