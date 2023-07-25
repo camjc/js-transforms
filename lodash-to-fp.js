@@ -450,6 +450,21 @@ const customArgumentOrder = {
   sortedLastIndexBy: true,
   updateWith: true,
   zipWith: true,
+  // From many args to an array of args:
+  assignAll: true,
+  assignAllWith: true,
+  assignInAll: true,
+  assignInAllWith: true,
+  defaultsAll: true,
+  defaultsDeepAll: true,
+  invokeArgs: true,
+  invokeArgsMap: true,
+  mergeAll: true,
+  mergeAllWith: true,
+  partial: true,
+  partialRight: true,
+  without: true,
+  zipAll: true,
 };
 
 const rotate = (arr) => {
@@ -633,10 +648,6 @@ export default function transformer(file, api) {
         node.comments.push(j.commentLine('TODO: Check Mutation'));
       }
 
-      if (name.startsWith('partial')) {
-        node.comments = node.comments || [];
-        node.comments.push(j.commentLine('TODO: Check second arg is an Array of args like `partial(myFunc, [arg0])`'));
-      }
       return node;
     });
 
