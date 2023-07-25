@@ -465,6 +465,8 @@ const customArgumentOrder = {
   partialRight: true,
   without: true,
   zipAll: true,
+  // Bag of pain
+  chain: true,
 };
 
 const rotate = (arr) => {
