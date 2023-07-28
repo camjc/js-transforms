@@ -571,8 +571,9 @@ export default function transformer(file, api) {
       // Convert three arg `get` to `getOr`.
       const name = nodeName === 'get' && args.length === 3 ? 'getOr' : nodeName;
 
+      const isFirstArgAnEmptyObject = args[0] && args[0].type === 'ObjectExpression' && args[0].properties.length === 0
       // Bail if we don't want to fix possible mutation scenarios
-      if (nonFpMutates[name] && !shouldFixMutations) {
+      if (nonFpMutates[name] && !shouldFixMutations && !isFirstArgAnEmptyObject) {
         isNeedingLodashRegularStill = true;
         return p.node;
       }
@@ -591,7 +592,8 @@ export default function transformer(file, api) {
         const isLiteral = ['ArrayExpression', 'Literal', 'ObjectExpression'].indexOf(iteratee && iteratee.type) > -1;
         const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee && iteratee.type) > -1;
         const isFunctionWithOneArg = isFunction && iteratee && iteratee.params.length === 1;
-        const valid = isDataType || isLiteral || isFunctionWithOneArg;
+        const isIterateeALodashFunc = fpMethodsForThisFile.has(iteratee && iteratee.name) || iteratee && iteratee.object && iteratee.object.name === '_'
+        const valid = isDataType || isLiteral || isFunctionWithOneArg || isIterateeALodashFunc;
         if (!valid) {
           isNeedingLodashRegularStill = true;
           return p.node;
@@ -645,7 +647,7 @@ export default function transformer(file, api) {
 
       const node = j.callExpression(j.identifier(name), args);
 
-      if (nonFpMutates[name]) {
+      if (nonFpMutates[name] && !isFirstArgAnEmptyObject) {
         node.comments = node.comments || [];
         node.comments.push(j.commentLine('TODO: Check Mutation'));
       }
