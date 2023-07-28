@@ -469,6 +469,13 @@ const customArgumentOrder = {
   chain: true,
 };
 
+const getImport = ({ j, name, module, isUsingRequire }) =>
+  isUsingRequire
+    ? j.variableDeclaration('const', [
+        j.variableDeclarator(j.identifier(name), j.callExpression(j.identifier('require'), [j.literal(module)])),
+      ])
+    : j.importDeclaration([j.importDefaultSpecifier(j.identifier(name))], j.literal(module));
+
 const rotate = (arr) => {
   const first = arr.shift();
   arr.push(first);
@@ -483,27 +490,13 @@ export default function transformer(file, api) {
 
   let isNeedingLodashRegularStill = false;
   const fpMethodsForThisFile = new Set();
+  let isUsingRequire = false;
 
   const root = j(file.source);
 
   const getFirstNode = () => root.find(j.Program).get('body', 0).node;
   const firstNode = getFirstNode();
   const { comments } = firstNode;
-
-  // const replaceWithRequire = p => {
-  //   return j.variableDeclarator(
-  //     j.identifier(allPossibleToDestructureFromModule),
-  //     j.callExpression(j.identifier('require'), [j.literal('lodash/fp')]),
-  //   );
-  // };
-  // root
-  //   .find(j.VariableDeclarator, {
-  //     id: { name: '_' },
-  //     init: {
-  //       callee: { name: 'require' },
-  //     },
-  //   })
-  //   .replaceWith(replaceWithRequire);
 
   root
     .find(j.ImportDeclaration, {
@@ -515,6 +508,20 @@ export default function transformer(file, api) {
 
       return undefined;
     });
+  // Require version of adding imported lodash/fp
+  root
+    .find(j.VariableDeclarator, {
+      init: {
+        callee: { name: 'require' },
+        arguments: [{ value: 'lodash/fp' }],
+      },
+    })
+    .closest(j.VariableDeclaration, { kind: 'const' })
+    .replaceWith((p) => {
+      isUsingRequire = true;
+
+      p.value.declarations[0].id.properties.forEach((property) => fpMethodsForThisFile.add(property.key.name));
+    });
 
   // remove lodash import, add back later if we need to
   root
@@ -522,6 +529,19 @@ export default function transformer(file, api) {
       source: { value: 'lodash' },
     })
     .replaceWith();
+  // 'Require' version of removing lodash import
+  root
+    .find(j.VariableDeclarator, {
+      id: { name: '_' },
+      init: {
+        callee: { name: 'require' },
+        arguments: [{ value: 'lodash' }],
+      },
+    })
+    .closest(j.VariableDeclaration, { kind: 'const' })
+    .replaceWith((p) => {
+      isUsingRequire = true;
+    });
 
   for (const name in oneToOneRelation) {
     root
@@ -559,7 +579,6 @@ export default function transformer(file, api) {
       },
     })
     .replaceWith((p) => {
-
       if (!p.node.callee.property) {
         isNeedingLodashRegularStill = true;
         return p.node; // Complex case, not implemented
@@ -571,7 +590,7 @@ export default function transformer(file, api) {
       // Convert three arg `get` to `getOr`.
       const name = nodeName === 'get' && args.length === 3 ? 'getOr' : nodeName;
 
-      const isFirstArgAnEmptyObject = args[0] && args[0].type === 'ObjectExpression' && args[0].properties.length === 0
+      const isFirstArgAnEmptyObject = args[0] && args[0].type === 'ObjectExpression' && args[0].properties.length === 0;
       // Bail if we don't want to fix possible mutation scenarios
       if (nonFpMutates[name] && !shouldFixMutations && !isFirstArgAnEmptyObject) {
         isNeedingLodashRegularStill = true;
@@ -583,7 +602,7 @@ export default function transformer(file, api) {
           isNeedingLodashRegularStill = true;
           return p.node; // Not implemented
         }
-        args = args.reverse() // Reverse args for getOr
+        args = args.reverse(); // Reverse args for getOr
       } else if (oneToOneRelation[name]) {
         // Use FP without changing anything
       } else if (iterateeCappedToOneArgument[name]) {
@@ -592,7 +611,9 @@ export default function transformer(file, api) {
         const isLiteral = ['ArrayExpression', 'Literal', 'ObjectExpression'].indexOf(iteratee && iteratee.type) > -1;
         const isFunction = ['ArrowFunctionExpression', 'FunctionExpression'].indexOf(iteratee && iteratee.type) > -1;
         const isFunctionWithOneArg = isFunction && iteratee && iteratee.params.length === 1;
-        const isIterateeALodashFunc = fpMethodsForThisFile.has(iteratee && iteratee.name) || iteratee && iteratee.object && iteratee.object.name === '_'
+        const isIterateeALodashFunc =
+          fpMethodsForThisFile.has(iteratee && iteratee.name) ||
+          (iteratee && iteratee.object && iteratee.object.name === '_');
         const valid = isDataType || isLiteral || isFunctionWithOneArg || isIterateeALodashFunc;
         if (!valid) {
           isNeedingLodashRegularStill = true;
@@ -660,7 +681,7 @@ export default function transformer(file, api) {
     root
       .find(j.Program)
       .get('body', 0)
-      .insertAfter(j.importDeclaration([j.importDefaultSpecifier(j.identifier('_'))], j.literal('lodash')));
+      .insertAfter(getImport({ j, name: '_', module: 'lodash', isUsingRequire }));
   }
 
   if (fpMethodsForThisFile.size > 0) {
@@ -668,10 +689,12 @@ export default function transformer(file, api) {
       .find(j.Program)
       .get('body', 0)
       .insertAfter(
-        j.importDeclaration(
-          [j.importDefaultSpecifier(j.identifier(`{ ${[...fpMethodsForThisFile].sort().join(', ')} }`))],
-          j.literal('lodash/fp'),
-        ),
+        getImport({
+          j,
+          name: `{ ${[...fpMethodsForThisFile].sort().join(', ')} }`,
+          module: 'lodash/fp',
+          isUsingRequire,
+        }),
       );
   }
 
